@@ -236,8 +236,37 @@
 			{ type: 'fern', x: 500, z: 80, forSale: true }
 		];
 
-		// Input handling
+		// Input handling - expose keys globally for harness access
 		const keys = {};
+		window.keys = keys; // Expose for harness controller
+
+		// Key code translation map (harness sends 'Space'/'KeyE', game uses ' '/'e')
+		function translateKeyCode(code) {
+			const map = {
+				'Space': ' ',
+				'KeyE': 'e'
+			};
+			return map[code] || code;
+		}
+
+		// Create a proxy to handle both formats
+		window.keys = new Proxy(keys, {
+			set(target, prop, value) {
+				const translated = translateKeyCode(prop);
+				target[prop] = value;
+				target[translated] = value;
+				// Also handle lowercase for arrows
+				if (translated.toLowerCase) {
+					target[translated.toLowerCase()] = value;
+				}
+				return true;
+			},
+			get(target, prop) {
+				const translated = translateKeyCode(prop);
+				return target[prop] || target[translated];
+			}
+		});
+
 		document.addEventListener('keydown', (e) => {
 			if (namingMode) {
 				e.preventDefault();
