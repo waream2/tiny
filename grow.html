@@ -1,0 +1,1634 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>GROW - A Peaceful Plant Care Game</title>
+	<style>
+		@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+
+		body {
+			min-height: 100vh;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			background: linear-gradient(180deg, #2d1b0e 0%, #1a0f06 100%);
+			font-family: 'Press Start 2P', cursive;
+			overflow: hidden;
+		}
+
+		.game-container {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 16px;
+		}
+
+		h1 {
+			color: #7cb342;
+			font-size: 32px;
+			text-shadow:
+				0 4px 0 #4a6f23,
+				0 6px 8px rgba(0, 0, 0, 0.5);
+			letter-spacing: 8px;
+			animation: titleFloat 3s ease-in-out infinite;
+		}
+
+		@keyframes titleFloat {
+
+			0%,
+			100% {
+				transform: translateY(0);
+			}
+
+			50% {
+				transform: translateY(-4px);
+			}
+		}
+
+		.game-frame {
+			border: 8px solid #5d4037;
+			border-radius: 4px;
+			box-shadow:
+				0 0 0 4px #3e2723,
+				0 8px 32px rgba(0, 0, 0, 0.6),
+				inset 0 0 20px rgba(0, 0, 0, 0.3);
+			background: #3e2723;
+		}
+
+		canvas {
+			display: block;
+			image-rendering: pixelated;
+			image-rendering: crisp-edges;
+		}
+
+		.controls {
+			color: #a1887f;
+			font-size: 8px;
+			text-align: center;
+			line-height: 2;
+			opacity: 0.8;
+		}
+
+		.controls span {
+			color: #7cb342;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="game-container">
+		<h1>🌱 GROW 🌱</h1>
+		<div class="game-frame">
+			<canvas id="gameCanvas" width="600" height="400"></canvas>
+		</div>
+		<div class="controls">
+			<span>ARROWS</span> Move &nbsp;|&nbsp; <span>SPACE</span> Interact &nbsp;|&nbsp; <span>E</span> Name Plant
+			&nbsp;|&nbsp; 🪴
+		</div>
+	</div>
+
+	<script>
+		const canvas = document.getElementById('gameCanvas');
+		const ctx = canvas.getContext('2d');
+		ctx.imageSmoothingEnabled = false;
+
+		// Game state
+		let currentRoom = 'apartment';
+		let spacePressed = false;
+		let namingMode = false;
+		let selectedPlant = null;
+		let nameInput = '';
+		let coins = 50; // Starting money
+		let inCar = false;
+		let carX = 300;
+		let carDirection = 1; // 1 = right, -1 = left
+		let drivingProgress = 0; // 0-100 for driving animation
+		let drivingTo = null;
+
+		// Player state
+		const player = {
+			x: 300,
+			y: 280,
+			z: 100,
+			direction: 'down',
+			hasWater: false,
+			holdingPlant: null,
+			walkFrame: 0,
+			walkTimer: 0
+		};
+
+		// Dog state
+		const dog = {
+			x: 400,
+			y: 280,
+			z: 80,
+			direction: 'left',
+			targetX: 400,
+			targetZ: 80,
+			walkFrame: 0,
+			walkTimer: 0,
+			tailWag: 0,
+			moveTimer: 0
+		};
+
+		// Plant types with prices
+		const plantTypes = ['fern', 'round', 'tall', 'cactus', 'flower'];
+		const plantPrices = { fern: 10, round: 15, tall: 20, cactus: 25, flower: 30 };
+
+		// Plants
+		let indoorPlants = [
+			{ type: 'fern', x: 150, z: 60, thirst: 100, happy: true, growth: 1, name: '' },
+			{ type: 'round', x: 300, z: 40, thirst: 100, happy: true, growth: 1, name: '' },
+			{ type: 'tall', x: 450, z: 70, thirst: 100, happy: true, growth: 1, name: '' }
+		];
+
+		let outdoorPlants = [
+			{ type: 'fern', x: 120, z: 100, thirst: 100, happy: true, growth: 1, name: '' },
+			{ type: 'round', x: 250, z: 60, thirst: 100, happy: true, growth: 1, name: '' },
+			{ type: 'tall', x: 380, z: 120, thirst: 100, happy: true, growth: 1, name: '' },
+			{ type: 'round', x: 480, z: 80, thirst: 100, happy: true, growth: 1, name: '' }
+		];
+
+		// Store plants for sale
+		let storePlants = [
+			{ type: 'fern', x: 100, z: 80, forSale: true },
+			{ type: 'round', x: 180, z: 80, forSale: true },
+			{ type: 'tall', x: 260, z: 80, forSale: true },
+			{ type: 'cactus', x: 340, z: 80, forSale: true },
+			{ type: 'flower', x: 420, z: 80, forSale: true },
+			{ type: 'fern', x: 500, z: 80, forSale: true }
+		];
+
+		// Input handling
+		const keys = {};
+		document.addEventListener('keydown', (e) => {
+			if (namingMode) {
+				e.preventDefault();
+				if (e.key === 'Enter') {
+					if (selectedPlant) {
+						selectedPlant.name = nameInput;
+					}
+					namingMode = false;
+					selectedPlant = null;
+					nameInput = '';
+				} else if (e.key === 'Escape') {
+					namingMode = false;
+					selectedPlant = null;
+					nameInput = '';
+				} else if (e.key === 'Backspace') {
+					nameInput = nameInput.slice(0, -1);
+				} else if (e.key.length === 1 && nameInput.length < 12) {
+					nameInput += e.key;
+				}
+				return;
+			}
+			keys[e.key] = true;
+			keys[e.key.toLowerCase()] = true;
+			if (e.key === ' ') e.preventDefault();
+		});
+		document.addEventListener('keyup', (e) => {
+			if (namingMode) return;
+			keys[e.key] = false;
+			keys[e.key.toLowerCase()] = false;
+			if (e.key === ' ') spacePressed = false;
+		});
+
+		// Drawing functions
+		function drawCloud(x, y) {
+			ctx.fillStyle = '#ffffff';
+			ctx.beginPath();
+			ctx.arc(x, y, 15, 0, Math.PI * 2);
+			ctx.arc(x + 20, y - 5, 18, 0, Math.PI * 2);
+			ctx.arc(x + 40, y, 14, 0, Math.PI * 2);
+			ctx.arc(x + 20, y + 5, 12, 0, Math.PI * 2);
+			ctx.fill();
+		}
+
+		function drawApartment() {
+			// Sky through windows
+			ctx.fillStyle = '#87ceeb';
+			ctx.fillRect(0, 0, 600, 150);
+
+			drawCloud(80, 40);
+			drawCloud(250, 60);
+			drawCloud(450, 35);
+
+			// Back wall
+			ctx.fillStyle = '#f5e6d3';
+			ctx.fillRect(0, 80, 600, 120);
+
+			// Wall texture
+			for (let i = 0; i < 20; i++) {
+				ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.03})`;
+				ctx.fillRect(Math.random() * 600, 80 + Math.random() * 120, 2, 2);
+			}
+
+			// Windows - adjusted to make room for sink in middle
+			drawWindow(140, 90, 80, 90);
+			drawWindow(380, 90, 80, 90);
+
+			// Floor
+			drawWoodenFloor();
+
+			// Sink - now on back wall between windows
+			drawSink(260, 140);
+
+			// Door to greenhouse
+			drawDoor(520, 100, 'Greenhouse →', player.x > 480 && player.z > 120);
+
+			// Door to outside/car
+			drawDoor(30, 100, '← Outside', player.x < 80 && player.z > 120);
+		}
+
+		function drawWindow(x, y, w, h) {
+			ctx.fillStyle = '#4a3728';
+			ctx.fillRect(x - 4, y - 4, w + 8, h + 8);
+
+			ctx.fillStyle = '#8b6914';
+			ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+
+			const gradient = ctx.createLinearGradient(x, y, x, y + h);
+			gradient.addColorStop(0, '#a8d8ff');
+			gradient.addColorStop(1, '#87ceeb');
+			ctx.fillStyle = gradient;
+			ctx.fillRect(x, y, w, h);
+
+			ctx.fillStyle = '#8b6914';
+			ctx.fillRect(x + w / 2 - 2, y, 4, h);
+			ctx.fillRect(x, y + h / 2 - 2, w, 4);
+
+			ctx.fillStyle = 'rgba(255,255,255,0.3)';
+			ctx.fillRect(x + 3, y + 3, 8, 20);
+		}
+
+		function drawWoodenFloor() {
+			const startY = 200;
+			for (let row = 0; row < 25; row++) {
+				const y = startY + row * 8;
+				for (let col = 0; col < 30; col++) {
+					const x = col * 20 + ((row % 2) * 10);
+					const shade = (col + row) % 2 === 0 ? '#c9a66b' : '#b8935a';
+					ctx.fillStyle = shade;
+					ctx.fillRect(x, y, 19, 7);
+
+					ctx.fillStyle = 'rgba(0,0,0,0.1)';
+					ctx.fillRect(x + 2, y + 2, 15, 1);
+				}
+			}
+		}
+
+		function drawSink(x, y) {
+			const near = player.x > 240 && player.x < 360 && player.z > 130 && currentRoom === 'apartment';
+
+			ctx.fillStyle = '#5d4037';
+			ctx.fillRect(x, y, 80, 60);
+
+			ctx.fillStyle = '#8d6e63';
+			ctx.fillRect(x, y, 80, 8);
+			ctx.fillStyle = '#a1887f';
+			ctx.fillRect(x + 2, y + 2, 76, 4);
+
+			ctx.fillStyle = '#e0e0e0';
+			ctx.fillRect(x + 10, y + 10, 60, 35);
+			ctx.fillStyle = '#b0bec5';
+			ctx.fillRect(x + 15, y + 15, 50, 25);
+			ctx.fillStyle = '#78909c';
+			ctx.fillRect(x + 18, y + 18, 44, 19);
+
+			ctx.fillStyle = '#9e9e9e';
+			ctx.fillRect(x + 55, y + 5, 8, 15);
+			ctx.fillStyle = '#bdbdbd';
+			ctx.fillRect(x + 50, y + 5, 20, 6);
+			ctx.fillRect(x + 48, y + 8, 8, 10);
+
+			ctx.fillStyle = '#64b5f6';
+			ctx.fillRect(x + 50, y + 18 + (Date.now() % 500 < 250 ? 2 : 0), 3, 3);
+
+			if (near && !player.hasWater && !player.holdingPlant) {
+				ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+				ctx.fillRect(x - 2, y - 2, 84, 64);
+				drawPrompt(x + 40, y - 15, 'PRESS SPACE');
+			}
+		}
+
+		function drawDoor(x, y, label, near) {
+			ctx.fillStyle = '#4a3728';
+			ctx.fillRect(x - 4, y - 4, 54, 104);
+
+			ctx.fillStyle = '#8b6914';
+			ctx.fillRect(x, y, 46, 96);
+
+			ctx.fillStyle = '#a67c00';
+			ctx.fillRect(x + 5, y + 5, 36, 35);
+			ctx.fillRect(x + 5, y + 50, 36, 40);
+
+			ctx.fillStyle = '#ffd700';
+			ctx.beginPath();
+			ctx.arc(x + 38, y + 50, 4, 0, Math.PI * 2);
+			ctx.fill();
+
+			if (near) {
+				ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+				ctx.fillRect(x - 6, y - 6, 58, 108);
+				drawPrompt(x + 23, y - 15, label);
+			}
+		}
+
+		function drawGreenhouse() {
+			const skyGradient = ctx.createLinearGradient(0, 0, 0, 200);
+			skyGradient.addColorStop(0, '#87ceeb');
+			skyGradient.addColorStop(1, '#90caf9');
+			ctx.fillStyle = skyGradient;
+			ctx.fillRect(0, 0, 600, 200);
+
+			drawCloud(100, 50);
+			drawCloud(350, 30);
+			drawCloud(500, 60);
+
+			ctx.fillStyle = 'rgba(200, 230, 200, 0.4)';
+			ctx.fillRect(0, 60, 600, 140);
+
+			ctx.fillStyle = '#2e7d32';
+			for (let i = 0; i < 7; i++) {
+				ctx.fillRect(i * 100, 60, 6, 140);
+			}
+			ctx.fillRect(0, 60, 600, 6);
+			ctx.fillRect(0, 130, 600, 4);
+
+			drawGrassFloor();
+			drawDirtPaths();
+
+			// Door back to apartment
+			const near = player.x < 120 && player.z > 120;
+			drawGreenhouseDoor(30, 100, '← Apartment', near);
+		}
+
+		function drawGrassFloor() {
+			const startY = 200;
+			ctx.fillStyle = '#4a7c3f';
+			ctx.fillRect(0, startY, 600, 200);
+
+			for (let i = 0; i < 300; i++) {
+				const x = Math.random() * 600;
+				const y = startY + Math.random() * 200;
+				ctx.fillStyle = Math.random() > 0.5 ? '#5a8c4f' : '#3a6c2f';
+				ctx.fillRect(x, y, 2, 4);
+			}
+		}
+
+		function drawDirtPaths() {
+			ctx.fillStyle = '#8d6e63';
+			ctx.fillRect(0, 280, 600, 30);
+			ctx.fillRect(280, 200, 40, 200);
+
+			for (let i = 0; i < 100; i++) {
+				ctx.fillStyle = Math.random() > 0.5 ? '#795548' : '#9e8b80';
+				const x = Math.random() * 600;
+				const y = 275 + Math.random() * 40;
+				ctx.fillRect(x, y, 3, 3);
+			}
+		}
+
+		function drawGreenhouseDoor(x, y, label, near) {
+			ctx.fillStyle = '#1b5e20';
+			ctx.fillRect(x - 4, y - 4, 54, 104);
+
+			ctx.fillStyle = '#4caf50';
+			ctx.fillRect(x, y, 46, 96);
+
+			ctx.fillStyle = 'rgba(200, 230, 200, 0.5)';
+			ctx.fillRect(x + 8, y + 10, 30, 50);
+
+			ctx.fillStyle = '#ffd700';
+			ctx.fillRect(x + 36, y + 45, 6, 12);
+
+			if (near) {
+				ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+				ctx.fillRect(x - 6, y - 6, 58, 108);
+				drawPrompt(x + 23, y - 15, label);
+			}
+		}
+
+		function drawOutside() {
+			// Sky
+			const skyGradient = ctx.createLinearGradient(0, 0, 0, 150);
+			skyGradient.addColorStop(0, '#64b5f6');
+			skyGradient.addColorStop(1, '#90caf9');
+			ctx.fillStyle = skyGradient;
+			ctx.fillRect(0, 0, 600, 200);
+
+			drawCloud(50, 40);
+			drawCloud(200, 60);
+			drawCloud(400, 30);
+			drawCloud(520, 55);
+
+			// Distant trees
+			for (let i = 0; i < 8; i++) {
+				drawDistantTree(i * 80 + 30, 140);
+			}
+
+			// Ground
+			ctx.fillStyle = '#7cb342';
+			ctx.fillRect(0, 180, 600, 220);
+
+			// Grass texture
+			for (let i = 0; i < 200; i++) {
+				ctx.fillStyle = Math.random() > 0.5 ? '#8bc34a' : '#689f38';
+				ctx.fillRect(Math.random() * 600, 180 + Math.random() * 220, 2, 4);
+			}
+
+			// Road
+			ctx.fillStyle = '#424242';
+			ctx.fillRect(0, 280, 600, 60);
+
+			// Road markings
+			ctx.fillStyle = '#ffeb3b';
+			for (let i = 0; i < 10; i++) {
+				ctx.fillRect(i * 70 + 20, 307, 40, 6);
+			}
+
+			// Driveway
+			ctx.fillStyle = '#757575';
+			ctx.fillRect(450, 200, 80, 80);
+
+			// House (background)
+			drawHouseExterior();
+
+			// Car
+			drawCar(carX, 260);
+
+			// Sign to store
+			drawRoadSign(100, 220, 'PLANT STORE →');
+		}
+
+		function drawDistantTree(x, y) {
+			ctx.fillStyle = '#5d4037';
+			ctx.fillRect(x - 3, y, 6, 20);
+
+			ctx.fillStyle = '#2e7d32';
+			ctx.beginPath();
+			ctx.moveTo(x, y - 25);
+			ctx.lineTo(x - 20, y + 5);
+			ctx.lineTo(x + 20, y + 5);
+			ctx.fill();
+
+			ctx.fillStyle = '#388e3c';
+			ctx.beginPath();
+			ctx.moveTo(x, y - 35);
+			ctx.lineTo(x - 15, y - 10);
+			ctx.lineTo(x + 15, y - 10);
+			ctx.fill();
+		}
+
+		function drawHouseExterior() {
+			// House body
+			ctx.fillStyle = '#f5e6d3';
+			ctx.fillRect(400, 100, 180, 100);
+
+			// Roof
+			ctx.fillStyle = '#8d6e63';
+			ctx.beginPath();
+			ctx.moveTo(380, 100);
+			ctx.lineTo(490, 50);
+			ctx.lineTo(600, 100);
+			ctx.fill();
+
+			// Door
+			ctx.fillStyle = '#8b6914';
+			ctx.fillRect(470, 140, 40, 60);
+			ctx.fillStyle = '#ffd700';
+			ctx.beginPath();
+			ctx.arc(500, 170, 4, 0, Math.PI * 2);
+			ctx.fill();
+
+			// Windows
+			ctx.fillStyle = '#87ceeb';
+			ctx.fillRect(420, 120, 30, 30);
+			ctx.fillRect(530, 120, 30, 30);
+			ctx.fillStyle = '#8b6914';
+			ctx.fillRect(433, 120, 4, 30);
+			ctx.fillRect(420, 133, 30, 4);
+			ctx.fillRect(543, 120, 4, 30);
+			ctx.fillRect(530, 133, 30, 4);
+
+			// Door interaction
+			const nearDoor = player.x > 450 && player.x < 530 && player.z > 100;
+			if (nearDoor && currentRoom === 'outside') {
+				ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+				ctx.fillRect(465, 135, 50, 70);
+				drawPrompt(490, 125, 'ENTER HOME');
+			}
+		}
+
+		function drawCar(x, y) {
+			// Shadow
+			ctx.fillStyle = 'rgba(0,0,0,0.3)';
+			ctx.beginPath();
+			ctx.ellipse(x, y + 35, 45, 10, 0, 0, Math.PI * 2);
+			ctx.fill();
+
+			// Car body
+			ctx.fillStyle = '#e53935';
+			ctx.fillRect(x - 40, y, 80, 25);
+
+			// Car top
+			ctx.fillStyle = '#c62828';
+			ctx.fillRect(x - 25, y - 20, 50, 22);
+
+			// Windows
+			ctx.fillStyle = '#81d4fa';
+			ctx.fillRect(x - 22, y - 17, 20, 16);
+			ctx.fillRect(x + 2, y - 17, 20, 16);
+
+			// Window shine
+			ctx.fillStyle = 'rgba(255,255,255,0.4)';
+			ctx.fillRect(x - 20, y - 15, 5, 10);
+			ctx.fillRect(x + 4, y - 15, 5, 10);
+
+			// Wheels
+			ctx.fillStyle = '#212121';
+			ctx.beginPath();
+			ctx.arc(x - 25, y + 25, 12, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.beginPath();
+			ctx.arc(x + 25, y + 25, 12, 0, Math.PI * 2);
+			ctx.fill();
+
+			// Wheel hubcaps
+			ctx.fillStyle = '#9e9e9e';
+			ctx.beginPath();
+			ctx.arc(x - 25, y + 25, 6, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.beginPath();
+			ctx.arc(x + 25, y + 25, 6, 0, Math.PI * 2);
+			ctx.fill();
+
+			// Headlights
+			ctx.fillStyle = '#ffeb3b';
+			ctx.fillRect(x + 35, y + 5, 6, 8);
+			ctx.fillRect(x - 41, y + 5, 6, 8);
+
+			// Check if player near car
+			const nearCar = Math.abs(player.x - x) < 60 && player.z < 80 && currentRoom === 'outside';
+			if (nearCar && !inCar) {
+				ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+				ctx.fillRect(x - 45, y - 25, 90, 65);
+				drawPrompt(x, y - 35, 'ENTER CAR');
+			}
+		}
+
+		function drawRoadSign(x, y, text) {
+			// Post
+			ctx.fillStyle = '#795548';
+			ctx.fillRect(x - 3, y, 6, 40);
+
+			// Sign
+			ctx.fillStyle = '#1b5e20';
+			ctx.fillRect(x - 50, y - 25, 100, 30);
+			ctx.fillStyle = '#ffffff';
+			ctx.fillRect(x - 48, y - 23, 96, 26);
+			ctx.fillStyle = '#1b5e20';
+			ctx.fillRect(x - 46, y - 21, 92, 22);
+
+			// Text
+			ctx.fillStyle = '#ffffff';
+			ctx.font = '6px "Press Start 2P"';
+			ctx.textAlign = 'center';
+			ctx.fillText(text, x, y - 7);
+		}
+
+		function drawPlantStore() {
+			// Interior background
+			ctx.fillStyle = '#e8f5e9';
+			ctx.fillRect(0, 0, 600, 400);
+
+			// Shelving/back wall
+			ctx.fillStyle = '#a5d6a7';
+			ctx.fillRect(0, 80, 600, 120);
+
+			// Store sign
+			ctx.fillStyle = '#2e7d32';
+			ctx.fillRect(200, 20, 200, 50);
+			ctx.fillStyle = '#ffffff';
+			ctx.font = '14px "Press Start 2P"';
+			ctx.textAlign = 'center';
+			ctx.fillText('PLANT STORE', 300, 52);
+
+			// Decorative plants on shelves (background)
+			for (let i = 0; i < 6; i++) {
+				drawShelfPlant(50 + i * 100, 120);
+			}
+
+			// Shelves
+			ctx.fillStyle = '#8d6e63';
+			ctx.fillRect(0, 150, 600, 10);
+			ctx.fillRect(0, 190, 600, 10);
+
+			// Floor - tile pattern
+			for (let row = 0; row < 25; row++) {
+				for (let col = 0; col < 20; col++) {
+					const x = col * 32;
+					const y = 200 + row * 10;
+					ctx.fillStyle = (col + row) % 2 === 0 ? '#c8e6c9' : '#a5d6a7';
+					ctx.fillRect(x, y, 32, 10);
+				}
+			}
+
+			// Counter
+			ctx.fillStyle = '#5d4037';
+			ctx.fillRect(450, 250, 120, 60);
+			ctx.fillStyle = '#8d6e63';
+			ctx.fillRect(450, 250, 120, 10);
+
+			// Cash register
+			ctx.fillStyle = '#37474f';
+			ctx.fillRect(480, 230, 40, 25);
+			ctx.fillStyle = '#78909c';
+			ctx.fillRect(485, 235, 30, 10);
+			ctx.fillStyle = '#4caf50';
+			ctx.fillRect(490, 248, 20, 5);
+
+			// Exit door
+			const nearExit = player.x > 520 && player.z > 120;
+			ctx.fillStyle = '#5d4037';
+			ctx.fillRect(540, 100, 50, 100);
+			ctx.fillStyle = '#8b6914';
+			ctx.fillRect(545, 105, 40, 90);
+			ctx.fillStyle = '#ffd700';
+			ctx.beginPath();
+			ctx.arc(555, 150, 4, 0, Math.PI * 2);
+			ctx.fill();
+
+			if (nearExit) {
+				ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+				ctx.fillRect(538, 98, 54, 104);
+				drawPrompt(565, 85, 'EXIT →');
+			}
+
+			// Coins display
+			ctx.fillStyle = 'rgba(0,0,0,0.7)';
+			ctx.fillRect(10, 50, 100, 25);
+			ctx.fillStyle = '#ffd700';
+			ctx.font = '10px "Press Start 2P"';
+			ctx.textAlign = 'left';
+			ctx.fillText('💰 ' + coins, 20, 68);
+		}
+
+		function drawShelfPlant(x, y) {
+			// Pot
+			ctx.fillStyle = '#d2691e';
+			ctx.fillRect(x - 8, y, 16, 12);
+
+			// Plant
+			ctx.fillStyle = '#4caf50';
+			ctx.beginPath();
+			ctx.arc(x, y - 8, 12, 0, Math.PI * 2);
+			ctx.fill();
+		}
+
+		function drawStorePlant(plant, index) {
+			const x = plant.x;
+			const baseY = 200 + (150 - plant.z) * 0.8;
+
+			if (!plant.forSale) return;
+
+			// Shadow
+			ctx.fillStyle = 'rgba(0,0,0,0.2)';
+			ctx.beginPath();
+			ctx.ellipse(x, baseY + 5, 18, 8, 0, 0, Math.PI * 2);
+			ctx.fill();
+
+			// Pot
+			drawPot(x, baseY);
+
+			// Plant
+			const plantColor = '#4caf50';
+			const darkColor = '#388e3c';
+
+			if (plant.type === 'fern') {
+				drawFern(x, baseY - 15, 20, plantColor, darkColor);
+			} else if (plant.type === 'round') {
+				drawRoundPlant(x, baseY - 15, 20, plantColor, darkColor);
+			} else if (plant.type === 'tall') {
+				drawTallPlant(x, baseY - 15, 20, plantColor, darkColor);
+			} else if (plant.type === 'cactus') {
+				drawCactus(x, baseY - 15, 20);
+			} else if (plant.type === 'flower') {
+				drawFlower(x, baseY - 15, 20);
+			}
+
+			// Price tag
+			const price = plantPrices[plant.type];
+			ctx.fillStyle = '#ffffff';
+			ctx.fillRect(x - 18, baseY + 20, 36, 16);
+			ctx.fillStyle = '#2e7d32';
+			ctx.font = '8px "Press Start 2P"';
+			ctx.textAlign = 'center';
+			ctx.fillText('$' + price, x, baseY + 32);
+
+			// Check if player is near
+			const dist = Math.sqrt((player.x - x) ** 2 + (player.z - plant.z) ** 2);
+			if (dist < 50 && !player.holdingPlant) {
+				ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+				ctx.fillRect(x - 20, baseY - 40, 40, 80);
+				if (coins >= price) {
+					drawPrompt(x, baseY - 50, 'BUY $' + price);
+				} else {
+					drawPrompt(x, baseY - 50, 'NEED $' + price);
+				}
+			}
+		}
+
+		function drawCactus(x, y, size) {
+			// Main body
+			ctx.fillStyle = '#66bb6a';
+			ctx.fillRect(x - 6, y - size, 12, size);
+
+			// Arms
+			ctx.fillRect(x - 14, y - size + 8, 10, 6);
+			ctx.fillRect(x - 14, y - size + 2, 6, 10);
+			ctx.fillRect(x + 4, y - size + 12, 10, 6);
+			ctx.fillRect(x + 8, y - size + 8, 6, 14);
+
+			// Spines
+			ctx.fillStyle = '#33691e';
+			for (let i = 0; i < 5; i++) {
+				ctx.fillRect(x - 3 + (i % 3) * 3, y - size + 3 + i * 4, 1, 2);
+			}
+		}
+
+		function drawFlower(x, y, size) {
+			// Stem
+			ctx.fillStyle = '#388e3c';
+			ctx.fillRect(x - 2, y - size / 2, 4, size / 2);
+
+			// Leaves
+			ctx.fillStyle = '#4caf50';
+			ctx.beginPath();
+			ctx.ellipse(x - 6, y - size / 3, 5, 3, -0.5, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.beginPath();
+			ctx.ellipse(x + 6, y - size / 2, 5, 3, 0.5, 0, Math.PI * 2);
+			ctx.fill();
+
+			// Flower petals
+			const petalColors = ['#e91e63', '#f06292', '#ec407a'];
+			for (let i = 0; i < 6; i++) {
+				const angle = (i / 6) * Math.PI * 2;
+				const px = x + Math.cos(angle) * 8;
+				const py = (y - size) + Math.sin(angle) * 8;
+				ctx.fillStyle = petalColors[i % 3];
+				ctx.beginPath();
+				ctx.arc(px, py, 5, 0, Math.PI * 2);
+				ctx.fill();
+			}
+
+			// Center
+			ctx.fillStyle = '#ffeb3b';
+			ctx.beginPath();
+			ctx.arc(x, y - size, 5, 0, Math.PI * 2);
+			ctx.fill();
+		}
+
+		function drawPlant(plant, index, isOutdoor) {
+			const x = plant.x;
+			const baseY = 200 + (150 - plant.z) * 0.8;
+			const swayOffset = plant.happy ? Math.sin(Date.now() / 500 + index) * 2 : 0;
+			const size = 20 * plant.growth;
+
+			const dist = Math.sqrt((player.x - x) ** 2 + (player.z - plant.z) ** 2);
+			const near = dist < 70;
+			const canInteract = near && !player.holdingPlant;
+
+			// Shadow
+			ctx.fillStyle = 'rgba(0,0,0,0.2)';
+			ctx.beginPath();
+			ctx.ellipse(x, baseY + 5, 18, 8, 0, 0, Math.PI * 2);
+			ctx.fill();
+
+			// Pot
+			drawPot(x, baseY);
+
+			// Plant based on type
+			const plantColor = plant.happy ? '#4caf50' : '#8bc34a';
+			const darkColor = plant.happy ? '#388e3c' : '#689f38';
+
+			if (plant.type === 'fern') {
+				drawFern(x + swayOffset, baseY - 15, size, plantColor, darkColor);
+			} else if (plant.type === 'round') {
+				drawRoundPlant(x + swayOffset, baseY - 15, size, plantColor, darkColor);
+			} else if (plant.type === 'tall') {
+				drawTallPlant(x + swayOffset, baseY - 15, size, plantColor, darkColor);
+			} else if (plant.type === 'cactus') {
+				drawCactus(x + swayOffset, baseY - 15, size);
+			} else if (plant.type === 'flower') {
+				drawFlower(x + swayOffset, baseY - 15, size);
+			}
+
+			// Face
+			drawPlantFace(x + swayOffset, baseY - 25, plant.happy);
+
+			// Plant name display
+			if (plant.name) {
+				ctx.fillStyle = 'rgba(0,0,0,0.6)';
+				const nameWidth = plant.name.length * 6 + 8;
+				ctx.fillRect(x - nameWidth / 2, baseY - 65, nameWidth, 12);
+				ctx.fillStyle = '#fff';
+				ctx.font = '8px "Press Start 2P"';
+				ctx.textAlign = 'center';
+				ctx.fillText(plant.name, x, baseY - 56);
+			}
+
+			// Thirst indicator
+			drawThirstBar(x, baseY + 15, plant.thirst);
+
+			// Water drop icon if thirsty
+			if (!plant.happy) {
+				drawWaterDrop(x + 15, baseY - (plant.name ? 75 : 45));
+			}
+
+			// Interaction highlight
+			if (canInteract) {
+				ctx.fillStyle = 'rgba(76, 175, 80, 0.5)';
+				ctx.beginPath();
+				ctx.arc(x, baseY + 5, 5, 0, Math.PI * 2);
+				ctx.fill();
+
+				if (player.hasWater) {
+					drawPrompt(x, baseY - (plant.name ? 80 : 55), 'WATER');
+				} else {
+					drawPrompt(x - 35, baseY - (plant.name ? 80 : 55), 'E:NAME');
+					drawPrompt(x + 35, baseY - (plant.name ? 80 : 55), 'SPACE:PICK');
+				}
+			}
+		}
+
+		function drawPot(x, y) {
+			ctx.fillStyle = '#d2691e';
+			ctx.beginPath();
+			ctx.moveTo(x - 15, y);
+			ctx.lineTo(x - 12, y + 20);
+			ctx.lineTo(x + 12, y + 20);
+			ctx.lineTo(x + 15, y);
+			ctx.closePath();
+			ctx.fill();
+
+			ctx.fillStyle = '#cd853f';
+			ctx.fillRect(x - 16, y - 3, 32, 5);
+
+			ctx.fillStyle = '#deb887';
+			ctx.fillRect(x - 14, y - 2, 4, 3);
+
+			ctx.fillStyle = '#5d4037';
+			ctx.beginPath();
+			ctx.ellipse(x, y, 13, 4, 0, 0, Math.PI * 2);
+			ctx.fill();
+		}
+
+		function drawFern(x, y, size, color, darkColor) {
+			ctx.fillStyle = darkColor;
+			ctx.fillRect(x - 2, y, 4, -size);
+
+			for (let i = 0; i < 5; i++) {
+				const fy = y - 8 - i * 8;
+				const spread = 6 + i * 2;
+				ctx.fillStyle = color;
+				ctx.fillRect(x - spread, fy, spread, 3);
+				ctx.fillRect(x - spread - 2, fy - 2, 3, 2);
+				ctx.fillRect(x, fy, spread, 3);
+				ctx.fillRect(x + spread - 1, fy - 2, 3, 2);
+			}
+		}
+
+		function drawRoundPlant(x, y, size, color, darkColor) {
+			const leafPositions = [
+				[0, -size / 2], [-size / 3, -size / 3], [size / 3, -size / 3],
+				[-size / 4, -size * 0.7], [size / 4, -size * 0.7], [0, -size * 0.85]
+			];
+
+			ctx.fillStyle = darkColor;
+			leafPositions.forEach(([ox, oy]) => {
+				ctx.beginPath();
+				ctx.arc(x + ox, y + oy, size / 3, 0, Math.PI * 2);
+				ctx.fill();
+			});
+
+			ctx.fillStyle = color;
+			leafPositions.forEach(([ox, oy]) => {
+				ctx.beginPath();
+				ctx.arc(x + ox - 1, y + oy - 1, size / 3.5, 0, Math.PI * 2);
+				ctx.fill();
+			});
+		}
+
+		function drawTallPlant(x, y, size, color, darkColor) {
+			for (let i = 0; i < 5; i++) {
+				const angle = (i - 2) * 0.3;
+				const leafX = x + Math.sin(angle) * 8;
+
+				ctx.fillStyle = i % 2 === 0 ? color : darkColor;
+				ctx.beginPath();
+				ctx.moveTo(leafX - 4, y);
+				ctx.lineTo(leafX, y - size - i * 3);
+				ctx.lineTo(leafX + 4, y);
+				ctx.closePath();
+				ctx.fill();
+			}
+		}
+
+		function drawPlantFace(x, y, happy) {
+			ctx.fillStyle = '#000';
+			ctx.fillRect(x - 5, y, 3, 3);
+			ctx.fillRect(x + 2, y, 3, 3);
+
+			if (happy) {
+				ctx.fillRect(x - 4, y + 6, 2, 2);
+				ctx.fillRect(x - 2, y + 8, 4, 2);
+				ctx.fillRect(x + 2, y + 6, 2, 2);
+			} else {
+				ctx.fillRect(x - 4, y + 10, 2, 2);
+				ctx.fillRect(x - 2, y + 8, 4, 2);
+				ctx.fillRect(x + 2, y + 10, 2, 2);
+			}
+		}
+
+		function drawThirstBar(x, y, thirst) {
+			ctx.fillStyle = '#424242';
+			ctx.fillRect(x - 15, y, 30, 4);
+
+			const fillColor = thirst > 60 ? '#2196f3' : thirst > 30 ? '#ff9800' : '#f44336';
+			ctx.fillStyle = fillColor;
+			ctx.fillRect(x - 15, y, 30 * (thirst / 100), 4);
+
+			ctx.strokeStyle = '#000';
+			ctx.lineWidth = 1;
+			ctx.strokeRect(x - 15, y, 30, 4);
+		}
+
+		function drawWaterDrop(x, y) {
+			const bounce = Math.sin(Date.now() / 200) * 3;
+			ctx.fillStyle = '#2196f3';
+			ctx.beginPath();
+			ctx.moveTo(x, y + bounce - 8);
+			ctx.quadraticCurveTo(x + 6, y + bounce, x, y + bounce + 6);
+			ctx.quadraticCurveTo(x - 6, y + bounce, x, y + bounce - 8);
+			ctx.fill();
+		}
+
+		function drawPlayer() {
+			if (inCar || drivingTo) return;
+
+			const baseY = 200 + (150 - player.z) * 0.8;
+			const bobOffset = Math.sin(player.walkTimer * 0.3) * (keys.ArrowUp || keys.ArrowDown || keys.ArrowLeft || keys.ArrowRight ? 2 : 0);
+
+			// Shadow
+			ctx.fillStyle = 'rgba(0,0,0,0.25)';
+			ctx.beginPath();
+			ctx.ellipse(player.x, baseY + 2, 12, 5, 0, 0, Math.PI * 2);
+			ctx.fill();
+
+			// Legs
+			const legOffset = Math.sin(player.walkTimer * 0.4) * 3;
+			ctx.fillStyle = '#5d4037';
+			if (player.direction === 'left' || player.direction === 'right') {
+				ctx.fillRect(player.x - 4, baseY - 8 + bobOffset, 4, 10);
+				ctx.fillRect(player.x, baseY - 8 + bobOffset + legOffset, 4, 10);
+			} else {
+				ctx.fillRect(player.x - 6 + legOffset, baseY - 8 + bobOffset, 4, 10);
+				ctx.fillRect(player.x + 2 - legOffset, baseY - 8 + bobOffset, 4, 10);
+			}
+
+			// Body
+			ctx.fillStyle = '#1e88e5';
+			ctx.fillRect(player.x - 8, baseY - 22 + bobOffset, 16, 16);
+			ctx.fillStyle = '#1565c0';
+			ctx.fillRect(player.x + 4, baseY - 22 + bobOffset, 4, 16);
+
+			// Head
+			ctx.fillStyle = '#ffcc80';
+			ctx.fillRect(player.x - 6, baseY - 32 + bobOffset, 12, 12);
+
+			// Hair
+			ctx.fillStyle = '#5d4037';
+			ctx.fillRect(player.x - 6, baseY - 34 + bobOffset, 12, 4);
+			if (player.direction === 'left') {
+				ctx.fillRect(player.x + 4, baseY - 32 + bobOffset, 3, 6);
+			} else if (player.direction === 'right') {
+				ctx.fillRect(player.x - 7, baseY - 32 + bobOffset, 3, 6);
+			}
+
+			// Eyes
+			ctx.fillStyle = '#000';
+			if (player.direction === 'down') {
+				ctx.fillRect(player.x - 3, baseY - 28 + bobOffset, 2, 2);
+				ctx.fillRect(player.x + 1, baseY - 28 + bobOffset, 2, 2);
+			} else if (player.direction === 'up') {
+				ctx.fillRect(player.x - 3, baseY - 30 + bobOffset, 2, 2);
+				ctx.fillRect(player.x + 1, baseY - 30 + bobOffset, 2, 2);
+			} else if (player.direction === 'left') {
+				ctx.fillRect(player.x - 4, baseY - 28 + bobOffset, 2, 2);
+				ctx.fillRect(player.x - 1, baseY - 28 + bobOffset, 2, 2);
+			} else {
+				ctx.fillRect(player.x + 1, baseY - 28 + bobOffset, 2, 2);
+				ctx.fillRect(player.x + 4, baseY - 28 + bobOffset, 2, 2);
+			}
+
+			// Watering can if holding water
+			if (player.hasWater) {
+				drawWateringCan(player.x + 12, baseY - 18 + bobOffset);
+			}
+
+			// Plant if holding
+			if (player.holdingPlant) {
+				drawHeldPlant(player.x, baseY - 45 + bobOffset, player.holdingPlant);
+				drawPrompt(player.x, baseY - 70, 'PUT DOWN');
+			}
+		}
+
+		function drawWateringCan(x, y) {
+			ctx.fillStyle = '#1976d2';
+			ctx.fillRect(x, y, 12, 10);
+			ctx.fillStyle = '#1565c0';
+			ctx.fillRect(x + 10, y - 4, 4, 8);
+			ctx.fillRect(x + 6, y - 6, 8, 3);
+			ctx.fillStyle = '#1976d2';
+			ctx.fillRect(x - 6, y + 2, 8, 3);
+			ctx.fillRect(x - 8, y, 3, 3);
+			ctx.fillStyle = '#64b5f6';
+			ctx.fillRect(x + 2, y + 2, 2, 2);
+		}
+
+		function drawHeldPlant(x, y, plant) {
+			ctx.fillStyle = '#d2691e';
+			ctx.fillRect(x - 6, y + 5, 12, 8);
+			ctx.fillStyle = '#cd853f';
+			ctx.fillRect(x - 7, y + 3, 14, 3);
+
+			ctx.fillStyle = '#4caf50';
+			if (plant.type === 'fern') {
+				ctx.fillRect(x - 1, y - 8, 2, 12);
+				for (let i = 0; i < 3; i++) {
+					ctx.fillRect(x - 4, y - 6 + i * 3, 3, 2);
+					ctx.fillRect(x + 1, y - 6 + i * 3, 3, 2);
+				}
+			} else if (plant.type === 'round') {
+				ctx.beginPath();
+				ctx.arc(x, y - 2, 8, 0, Math.PI * 2);
+				ctx.fill();
+			} else if (plant.type === 'tall') {
+				for (let i = -1; i <= 1; i++) {
+					ctx.beginPath();
+					ctx.moveTo(x + i * 3 - 2, y + 3);
+					ctx.lineTo(x + i * 3, y - 10);
+					ctx.lineTo(x + i * 3 + 2, y + 3);
+					ctx.fill();
+				}
+			} else if (plant.type === 'cactus') {
+				ctx.fillStyle = '#66bb6a';
+				ctx.fillRect(x - 3, y - 8, 6, 12);
+			} else if (plant.type === 'flower') {
+				ctx.fillStyle = '#388e3c';
+				ctx.fillRect(x - 1, y - 4, 2, 8);
+				ctx.fillStyle = '#e91e63';
+				ctx.beginPath();
+				ctx.arc(x, y - 6, 5, 0, Math.PI * 2);
+				ctx.fill();
+				ctx.fillStyle = '#ffeb3b';
+				ctx.beginPath();
+				ctx.arc(x, y - 6, 2, 0, Math.PI * 2);
+				ctx.fill();
+			}
+		}
+
+		function drawDog() {
+			if (currentRoom !== 'apartment') return;
+
+			const baseY = 200 + (150 - dog.z) * 0.8;
+			dog.tailWag = (dog.tailWag + 0.2) % (Math.PI * 2);
+
+			ctx.fillStyle = 'rgba(0,0,0,0.2)';
+			ctx.beginPath();
+			ctx.ellipse(dog.x, baseY + 2, 15, 6, 0, 0, Math.PI * 2);
+			ctx.fill();
+
+			if (dog.direction === 'left' || dog.direction === 'right') {
+				const flip = dog.direction === 'left' ? 1 : -1;
+
+				ctx.fillStyle = '#d4a574';
+				ctx.fillRect(dog.x - 12 * flip, baseY - 12, 24, 12);
+				ctx.fillStyle = '#c49464';
+				ctx.fillRect(dog.x - 12 * flip, baseY - 6, 24, 6);
+				ctx.fillStyle = '#d4a574';
+				ctx.fillRect(dog.x + 10 * flip, baseY - 16, 12, 12);
+				ctx.fillStyle = '#e4b584';
+				ctx.fillRect(dog.x + 18 * flip, baseY - 12, 6, 6);
+				ctx.fillStyle = '#000';
+				ctx.fillRect(dog.x + 22 * flip, baseY - 11, 3, 3);
+				ctx.fillRect(dog.x + 14 * flip, baseY - 14, 2, 2);
+				ctx.fillStyle = '#c49464';
+				ctx.fillRect(dog.x + 8 * flip, baseY - 20, 6, 8);
+
+				const legOffset = Math.sin(dog.walkTimer * 0.3) * 2;
+				ctx.fillStyle = '#d4a574';
+				ctx.fillRect(dog.x - 8 * flip, baseY - 2, 4, 8 + legOffset);
+				ctx.fillRect(dog.x + 4 * flip, baseY - 2, 4, 8 - legOffset);
+
+				const tailWag = Math.sin(dog.tailWag) * 4;
+				ctx.fillRect(dog.x - 16 * flip + tailWag, baseY - 14, 6, 4);
+			} else {
+				ctx.fillStyle = '#d4a574';
+				ctx.fillRect(dog.x - 10, baseY - 12, 20, 12);
+				ctx.fillRect(dog.x - 8, baseY - 22, 16, 12);
+				ctx.fillStyle = '#c49464';
+				ctx.fillRect(dog.x - 10, baseY - 24, 6, 10);
+				ctx.fillRect(dog.x + 4, baseY - 24, 6, 10);
+
+				if (dog.direction === 'down') {
+					ctx.fillStyle = '#000';
+					ctx.fillRect(dog.x - 4, baseY - 18, 2, 2);
+					ctx.fillRect(dog.x + 2, baseY - 18, 2, 2);
+					ctx.fillRect(dog.x - 1, baseY - 14, 3, 2);
+				}
+
+				ctx.fillStyle = '#d4a574';
+				ctx.fillRect(dog.x - 7, baseY - 2, 4, 8);
+				ctx.fillRect(dog.x + 3, baseY - 2, 4, 8);
+
+				if (dog.direction === 'up') {
+					const tailWag = Math.sin(dog.tailWag) * 3;
+					ctx.fillRect(dog.x - 2 + tailWag, baseY - 8, 4, 6);
+				}
+			}
+		}
+
+		function drawDrivingScene() {
+			// Sky
+			ctx.fillStyle = '#64b5f6';
+			ctx.fillRect(0, 0, 600, 200);
+
+			// Moving clouds
+			const cloudOffset = (drivingProgress * 3) % 600;
+			drawCloud(-cloudOffset + 100, 50);
+			drawCloud(-cloudOffset + 300, 30);
+			drawCloud(-cloudOffset + 500, 60);
+			drawCloud(-cloudOffset + 700, 40);
+
+			// Distant scenery moving
+			ctx.fillStyle = '#81c784';
+			ctx.fillRect(0, 150, 600, 50);
+
+			// Moving trees
+			for (let i = 0; i < 10; i++) {
+				const treeX = ((i * 100) - (drivingProgress * 4) % 1000 + 1000) % 1000 - 100;
+				drawDistantTree(treeX, 160);
+			}
+
+			// Road
+			ctx.fillStyle = '#424242';
+			ctx.fillRect(0, 200, 600, 200);
+
+			// Moving road lines
+			ctx.fillStyle = '#ffeb3b';
+			const lineOffset = (drivingProgress * 5) % 70;
+			for (let i = -1; i < 10; i++) {
+				ctx.fillRect(i * 70 - lineOffset, 295, 40, 6);
+			}
+
+			// Car (centered, slightly bouncing)
+			const bounce = Math.sin(drivingProgress * 0.3) * 2;
+			drawCar(300, 230 + bounce);
+
+			// Destination text
+			ctx.fillStyle = 'rgba(0,0,0,0.7)';
+			ctx.fillRect(200, 20, 200, 30);
+			ctx.fillStyle = '#fff';
+			ctx.font = '10px "Press Start 2P"';
+			ctx.textAlign = 'center';
+			const destText = drivingTo === 'store' ? 'Going to Plant Store...' : 'Going Home...';
+			ctx.fillText(destText, 300, 40);
+		}
+
+		function drawPrompt(x, y, text) {
+			ctx.fillStyle = 'rgba(0,0,0,0.7)';
+			const width = text.length * 6 + 8;
+			ctx.fillRect(x - width / 2, y - 6, width, 12);
+
+			ctx.fillStyle = '#7cb342';
+			ctx.font = '8px "Press Start 2P"';
+			ctx.textAlign = 'center';
+			ctx.fillText(text, x, y + 2);
+		}
+
+		// Game logic
+		function updatePlayer() {
+			if (namingMode || drivingTo) return;
+
+			const speed = 4;
+			let moving = false;
+
+			if (keys.ArrowLeft) {
+				player.x -= speed;
+				player.direction = 'left';
+				moving = true;
+			}
+			if (keys.ArrowRight) {
+				player.x += speed;
+				player.direction = 'right';
+				moving = true;
+			}
+			if (keys.ArrowUp) {
+				player.z += speed * 0.8;
+				player.direction = 'up';
+				moving = true;
+			}
+			if (keys.ArrowDown) {
+				player.z -= speed * 0.8;
+				player.direction = 'down';
+				moving = true;
+			}
+
+			if (moving) {
+				player.walkTimer++;
+			}
+
+			// Boundaries
+			player.x = Math.max(30, Math.min(570, player.x));
+			player.z = Math.max(0, Math.min(150, player.z));
+
+			// Interactions
+			if (keys[' '] && !spacePressed) {
+				spacePressed = true;
+				handleInteraction();
+			}
+
+			// E key for naming plants
+			if (keys['e'] && !namingMode && !player.hasWater && !player.holdingPlant) {
+				if (currentRoom === 'apartment' || currentRoom === 'greenhouse') {
+					const plants = currentRoom === 'apartment' ? indoorPlants : outdoorPlants;
+					for (let i = 0; i < plants.length; i++) {
+						const plant = plants[i];
+						const dist = Math.sqrt((player.x - plant.x) ** 2 + (player.z - plant.z) ** 2);
+						if (dist < 70) {
+							namingMode = true;
+							selectedPlant = plant;
+							nameInput = plant.name || '';
+							keys['e'] = false;
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		function handleInteraction() {
+			// Room-specific interactions
+			if (currentRoom === 'apartment') {
+				handleApartmentInteraction();
+			} else if (currentRoom === 'greenhouse') {
+				handleGreenhouseInteraction();
+			} else if (currentRoom === 'outside') {
+				handleOutsideInteraction();
+			} else if (currentRoom === 'store') {
+				handleStoreInteraction();
+			}
+		}
+
+		function handleApartmentInteraction() {
+			// Check sink (now in center of back wall)
+			if (player.x > 240 && player.x < 360 && player.z > 130) {
+				if (!player.hasWater && !player.holdingPlant) {
+					player.hasWater = true;
+					return;
+				}
+			}
+
+			// Door to greenhouse
+			if (player.x > 480 && player.z > 120) {
+				currentRoom = 'greenhouse';
+				player.x = 100;
+				player.z = 80;
+				return;
+			}
+
+			// Door to outside
+			if (player.x < 80 && player.z > 120) {
+				currentRoom = 'outside';
+				player.x = 490;
+				player.z = 80;
+				return;
+			}
+
+			handlePlantInteraction(indoorPlants);
+		}
+
+		function handleGreenhouseInteraction() {
+			// Door to apartment
+			if (player.x < 120 && player.z > 120) {
+				currentRoom = 'apartment';
+				player.x = 480;
+				player.z = 80;
+				return;
+			}
+
+			handlePlantInteraction(outdoorPlants);
+		}
+
+		function handleOutsideInteraction() {
+			// Enter house
+			if (player.x > 450 && player.x < 530 && player.z > 100) {
+				currentRoom = 'apartment';
+				player.x = 60;
+				player.z = 80;
+				return;
+			}
+
+			// Enter car
+			if (Math.abs(player.x - carX) < 60 && player.z < 80) {
+				// Start driving to store
+				drivingTo = 'store';
+				drivingProgress = 0;
+				return;
+			}
+
+			// Put down plant outside (on grass)
+			if (player.holdingPlant) {
+				// Can put plant in greenhouse instead
+				outdoorPlants.push({
+					...player.holdingPlant,
+					x: player.x,
+					z: player.z
+				});
+				player.holdingPlant = null;
+			}
+		}
+
+		function handleStoreInteraction() {
+			// Exit door
+			if (player.x > 520 && player.z > 120) {
+				drivingTo = 'home';
+				drivingProgress = 0;
+				return;
+			}
+
+			// Buy plants
+			for (let i = 0; i < storePlants.length; i++) {
+				const plant = storePlants[i];
+				if (!plant.forSale) continue;
+
+				const dist = Math.sqrt((player.x - plant.x) ** 2 + (player.z - plant.z) ** 2);
+				if (dist < 50 && !player.holdingPlant) {
+					const price = plantPrices[plant.type];
+					if (coins >= price) {
+						coins -= price;
+						player.holdingPlant = {
+							type: plant.type,
+							thirst: 100,
+							happy: true,
+							growth: 1,
+							name: ''
+						};
+						plant.forSale = false;
+
+						// Respawn plant after delay
+						setTimeout(() => {
+							plant.forSale = true;
+						}, 5000);
+
+						return;
+					}
+				}
+			}
+
+			// Put down plant (drops it, loses it in store)
+			if (player.holdingPlant) {
+				// Don't allow dropping plants in store - must take them home
+				drawPrompt(300, 150, "Take plants home first!");
+			}
+		}
+
+		function handlePlantInteraction(plants) {
+			// Put down plant
+			if (player.holdingPlant) {
+				plants.push({
+					...player.holdingPlant,
+					x: player.x,
+					z: player.z
+				});
+				player.holdingPlant = null;
+				return;
+			}
+
+			// Check plant interactions
+			for (let i = plants.length - 1; i >= 0; i--) {
+				const plant = plants[i];
+				const dist = Math.sqrt((player.x - plant.x) ** 2 + (player.z - plant.z) ** 2);
+
+				if (dist < 70) {
+					if (player.hasWater) {
+						plant.thirst = Math.min(100, plant.thirst + 25);
+						plant.happy = plant.thirst > 30;
+						player.hasWater = false;
+						return;
+					} else {
+						player.holdingPlant = plants.splice(i, 1)[0];
+						return;
+					}
+				}
+			}
+		}
+
+		function updateDog() {
+			if (currentRoom !== 'apartment') return;
+
+			dog.moveTimer++;
+
+			if (dog.moveTimer > 100 + Math.random() * 200) {
+				dog.targetX = 100 + Math.random() * 400;
+				dog.targetZ = 30 + Math.random() * 100;
+				dog.moveTimer = 0;
+			}
+
+			const dx = dog.targetX - dog.x;
+			const dz = dog.targetZ - dog.z;
+			const dist = Math.sqrt(dx * dx + dz * dz);
+
+			if (dist > 5) {
+				dog.x += (dx / dist) * 0.8;
+				dog.z += (dz / dist) * 0.8;
+				dog.walkTimer++;
+
+				if (Math.abs(dx) > Math.abs(dz)) {
+					dog.direction = dx > 0 ? 'right' : 'left';
+				} else {
+					dog.direction = dz > 0 ? 'up' : 'down';
+				}
+			}
+		}
+
+		function updatePlants() {
+			const allPlants = [...indoorPlants, ...outdoorPlants];
+			allPlants.forEach(plant => {
+				plant.thirst = Math.max(0, plant.thirst - 0.02);
+				plant.happy = plant.thirst > 30;
+
+				if (plant.happy && plant.growth < 1.3) {
+					plant.growth += 0.0001;
+				}
+			});
+		}
+
+		function updateDriving() {
+			if (!drivingTo) return;
+
+			drivingProgress += 1;
+
+			if (drivingProgress >= 100) {
+				if (drivingTo === 'store') {
+					currentRoom = 'store';
+					player.x = 300;
+					player.z = 50;
+				} else {
+					currentRoom = 'outside';
+					player.x = 350;
+					player.z = 50;
+				}
+				drivingTo = null;
+				drivingProgress = 0;
+			}
+		}
+
+		// Main render function
+		function render() {
+			ctx.clearRect(0, 0, 600, 400);
+
+			// If driving, show driving scene
+			if (drivingTo) {
+				drawDrivingScene();
+				return;
+			}
+
+			// Draw room
+			if (currentRoom === 'apartment') {
+				drawApartment();
+			} else if (currentRoom === 'greenhouse') {
+				drawGreenhouse();
+			} else if (currentRoom === 'outside') {
+				drawOutside();
+			} else if (currentRoom === 'store') {
+				drawPlantStore();
+			}
+
+			// Collect and sort objects by z for proper depth
+			const objects = [];
+
+			if (currentRoom === 'apartment') {
+				indoorPlants.forEach((plant, i) => {
+					objects.push({ type: 'plant', data: plant, index: i, z: plant.z, plants: indoorPlants });
+				});
+				objects.push({ type: 'dog', z: dog.z });
+			} else if (currentRoom === 'greenhouse') {
+				outdoorPlants.forEach((plant, i) => {
+					objects.push({ type: 'plant', data: plant, index: i, z: plant.z, plants: outdoorPlants });
+				});
+			} else if (currentRoom === 'store') {
+				storePlants.forEach((plant, i) => {
+					objects.push({ type: 'storePlant', data: plant, index: i, z: plant.z });
+				});
+			}
+
+			if (currentRoom !== 'outside' || !inCar) {
+				objects.push({ type: 'player', z: player.z });
+			}
+
+			// Sort by z (higher z = further back = render first)
+			objects.sort((a, b) => b.z - a.z);
+
+			// Render sorted objects
+			objects.forEach(obj => {
+				if (obj.type === 'plant') {
+					drawPlant(obj.data, obj.index, currentRoom === 'greenhouse');
+				} else if (obj.type === 'storePlant') {
+					drawStorePlant(obj.data, obj.index);
+				} else if (obj.type === 'player') {
+					drawPlayer();
+				} else if (obj.type === 'dog') {
+					drawDog();
+				}
+			});
+
+			// Room label
+			ctx.fillStyle = 'rgba(0,0,0,0.5)';
+			const labels = {
+				apartment: '🏠 Apartment',
+				greenhouse: '🌿 Greenhouse',
+				outside: '🚗 Outside',
+				store: '🌱 Plant Store'
+			};
+			const label = labels[currentRoom];
+			ctx.fillRect(10, 10, label.length * 7 + 10, 20);
+			ctx.fillStyle = '#fff';
+			ctx.font = '10px "Press Start 2P"';
+			ctx.textAlign = 'left';
+			ctx.fillText(label, 15, 24);
+
+			// Coins display (always show)
+			ctx.fillStyle = 'rgba(0,0,0,0.5)';
+			ctx.fillRect(500, 10, 90, 20);
+			ctx.fillStyle = '#ffd700';
+			ctx.textAlign = 'right';
+			ctx.fillText('💰 ' + coins, 580, 24);
+
+			// Naming UI overlay
+			if (namingMode) {
+				ctx.fillStyle = 'rgba(0,0,0,0.6)';
+				ctx.fillRect(0, 0, 600, 400);
+
+				ctx.fillStyle = '#5d4037';
+				ctx.fillRect(150, 150, 300, 100);
+				ctx.fillStyle = '#8d6e63';
+				ctx.fillRect(155, 155, 290, 90);
+
+				ctx.fillStyle = '#fff';
+				ctx.font = '10px "Press Start 2P"';
+				ctx.textAlign = 'center';
+				ctx.fillText('NAME YOUR PLANT', 300, 175);
+
+				ctx.fillStyle = '#3e2723';
+				ctx.fillRect(175, 190, 250, 25);
+				ctx.fillStyle = '#fff';
+				ctx.fillRect(177, 192, 246, 21);
+
+				ctx.fillStyle = '#000';
+				ctx.font = '12px "Press Start 2P"';
+				const displayText = nameInput + (Date.now() % 1000 < 500 ? '|' : '');
+				ctx.fillText(displayText, 300, 208);
+
+				ctx.fillStyle = '#d7ccc8';
+				ctx.font = '6px "Press Start 2P"';
+				ctx.fillText('ENTER to save | ESC to cancel', 300, 235);
+			}
+		}
+
+		// Game loop
+		function gameLoop() {
+			updatePlayer();
+			updateDog();
+			updatePlants();
+			updateDriving();
+			render();
+		}
+
+		setInterval(gameLoop, 50);
+	</script>
+</body>
+
+</html>
